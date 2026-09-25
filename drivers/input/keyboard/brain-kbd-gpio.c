@@ -58,13 +58,14 @@ static void bk_gpio_read_keys(struct input_dev *inputdev, ulong* result)
 			err = gpiod_get_array_value(8, kbd->in, NULL, &in[try][i]);
 			if (err) {
 				dev_err(dev, "failed to get array value: %d\n", err);
+			} else {
+				/*
+			 	* Decode the raw read into a 7-bit per-column row mask
+			 	* where a pressed key is 0 (active low). Input bit 5 is
+			 	* unused; raw bits 6 and 7 map to rows 5 and 6.
+			 	*/
+				in[try][i] = (((in[try][i] ^ (in[try][i] >> 1)) & 0x1f) ^ (in[try][i] >> 1)) & 0x7f;
 			}
-			/*
-			 * Decode the raw read into a 7-bit per-column row mask
-			 * where a pressed key is 0 (active low). Input bit 5 is
-			 * unused; raw bits 6 and 7 map to rows 5 and 6.
-			 */
-			in[try][i] = (((in[try][i] ^ (in[try][i] >> 1)) & 0x1f) ^ (in[try][i] >> 1)) & 0x7f;
 			gpiod_direction_input(kbd->out[i]);
 		}
 
