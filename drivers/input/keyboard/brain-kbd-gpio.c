@@ -50,13 +50,7 @@ static void bk_gpio_read_keys(struct input_dev *inputdev, ulong* result)
 		for (i = 0; i < ARRAY_SIZE(in[0]); i++) {
 			/*
 			 * Drive only the scanned column low and leave every
-			 * other column in high-impedance (input) mode. The
-			 * sense (row) lines are pulled up in the device tree,
-			 * so a pressed key pulls its row low. Keeping the other
-			 * columns hi-Z (instead of driving them low) prevents a
-			 * key held on another column from shorting a shared row
-			 * line, which is what previously masked same-row chords
-			 * such as Shift/Symbol + N/M/-.
+			 * other column in high-impedance (input) mode.
 			 */
 			gpiod_direction_output(kbd->out[i], 0);
 			udelay(100);
