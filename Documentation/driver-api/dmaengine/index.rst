@@ -47,6 +47,14 @@ This book adds some notes about PXA DMA
 
    pxa_dma
 
+MXS DMA and audio termination
+----------------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   mxs-stop
+
 .. only::  subproject and html
 
    Indices
