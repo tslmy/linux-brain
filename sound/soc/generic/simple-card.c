@@ -201,6 +201,11 @@ static int simple_link_init(struct asoc_simple_priv *priv,
 	dai_link->init			= asoc_simple_dai_init;
 	dai_link->ops			= &simple_ops;
 
+	/* Keep DAI link names unique on multi-link cards. */
+	if (simple_priv_to_card(priv)->num_links > 1)
+		return asoc_simple_set_dailink_name(dev, dai_link, "%s-%d",
+						    name, li->link);
+
 	return asoc_simple_set_dailink_name(dev, dai_link, name);
 }
 

@@ -232,6 +232,10 @@ patternProperties:
         $ref: "#/definitions/frame-inversion"
       bitclock-inversion:
         $ref: "#/definitions/bitclock-inversion"
+      playback-only:
+        $ref: "#/definitions/playback-only"
+      capture-only:
+        $ref: "#/definitions/capture-only"
       format:
         $ref: "#/definitions/format"
       mclk-fs:
@@ -250,6 +254,11 @@ patternProperties:
         maxItems: 1
       mic-det-gpio:
         maxItems: 1
+
+    not:
+      required:
+        - playback-only
+        - capture-only
 
     patternProperties:
       "^cpu(@[0-9a-f]+)?":

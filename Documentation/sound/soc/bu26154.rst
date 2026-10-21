@@ -1,0 +1,211 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+==================================
+ROHM BU26154 audio support status
+==================================
+
+Supported configuration
+=======================
+
+``sound/soc/codecs/bu26154.c`` provides I2C ASoC codec support for one
+capture path and one speaker playback path: 44.1 kHz, S16_LE, two I2S slots,
+with the codec as clock consumer and an external 512fs MCLK. The mono ADC
+signal occupies the left slot. Capture and playback are mutually exclusive.
+Both playback slots feed
+the mono speaker; headphone output and other PCM formats are not advertised.
+
+``Speaker Playback Switch`` enables the DAPM output route and defaults off.
+``Playback Volume`` defaults to mute: value 0 is mute, and values 1--143
+represent -71.5 to -0.5 dB in 0.5 dB steps. The prohibited PDATT value 0xff
+is not exposed. Analog attenuation is fixed at -12 dB, speaker boost is
+disabled, and headphone amplifiers and their supply remain off. Playback
+power sequencing has software coverage; a basic user-reported integration
+check is recorded below. Electrical sequencing and rail switching remain
+unvalidated.
+
+The driver does not register a sound card or enable a board description.
+Its MCLK provider must deliver nominal 22.5792 MHz when enabled during ASoC
+component probe. The driver accepts up to 0.1% divider rounding; a
+22,573,242 Hz clock falls within that tolerance. This is a driver policy,
+not a datasheet accuracy specification.
+
+Codec configuration
+===================
+
+The binding describes the I2C device, its MCLK and four input supplies.
+HPVDD, HPVSS, REGOUT and VMID are generated outputs. The chip has no
+documented silicon ID; enumeration identifies it, while a MAPCON read checks
+that accesses are in register map 0. A nonzero bank is rejected without
+changing the bank or resetting the device.
+
+The register settings follow BU26154MUV Rev.002:
+
+* MIC MINVOL is physically in bits 7:5; MINDIF is bit 1. The volume control
+  uses shift 5 and a 6--27 dB range in 3 dB steps. Bits 4:2 and 0 are
+  reserved, so treating MINVOL[2:0] as register bits 2:0 is incorrect.
+* SR=7 selects 44.1 kHz; CLKSEL=6 selects external 512fs MCLK without the
+  PLL. CLKEN enables MCLK input and PLLOE, including in PLL-bypass mode.
+* SAITX and SAIRX are both set to 0x80 for 16-bit I2S. SAIMODE at read
+  address 0x64 controls clock-provider mode and byte swapping; zero selects
+  clock-consumer mode without byte swapping.
+* Rate and serial format are changed only while RECPLAY is stopped. Capture
+  uses VMID fast-charge and normal modes, with a conservative 100 ms fast
+  charge followed by at least 5 ms normal-mode settling. Playback follows
+  the same reference settling before enabling its DAC and speaker path.
+  MCTIME=32 specifies 4096/fs, about 92.9 ms at 44.1 kHz, including DSP
+  initialization; both paths wait 100 ms after their RECPLAY command.
+
+The register map uses even read and odd write indexes. Regmap-I2C applies
+``write_flag_mask = BIT(0)`` and ``reg_stride = 2``; raw I2C is required
+because the SMBus register-operation fallback does not apply the write flag.
+Single-register transfers and a register whitelist avoid assumptions about
+sequential access or cached state. Regmap paging selects map 1 for speaker
+input configuration, preserving the even-read/odd-write index convention.
+
+DAPM controls the shared audio clock and each stream's power sequence.
+Stream startup holds a standard CCF reference through ``hw_params``, mute
+and ``hw_free`` register access, releasing it at shutdown. DAPM holds an
+independent reference while the power path is active; the component's
+initialization reference is temporary. No card-specific clock lease is
+required for codec register access.
+
+Power-up failures are recorded because this kernel's DAPM event errors do
+not fail PCM prepare; the subsequent PCM START is rejected. Power-down
+attempts continue after an I2C
+error. A failed component probe performs its own best-effort unwind.
+
+MXS clock and card integration
+==============================
+
+The MXS SAIF MCLK provider uses the generic divider helpers with hardware
+values 0--4 representing divisors 1, 2, 4, 8 and 16. Reserved values are
+excluded and ``CLK_GET_RATE_NOCACHE`` rereads hardware. CCF enable/disable
+callbacks coordinate reset, RUN and CLKGATE with legacy and PCM ownership;
+they do not call the legacy API or acquire its mutex. The output provider
+does not infer or propagate a functional-parent rate from MCLK alone.
+
+``mxs_saif_get_mclk()`` and ``mxs_saif_put_mclk()`` hold one legacy physical
+MCLK lease: a second get returns ``-EBUSY``. PCM generator users are counted
+separately, so stopping one cannot stop another's clocks. A retiring PCM
+retains ownership through DMA synchronization and physical settling.
+Each DAI obtains a distinct consumer handle through the master's OF clock
+provider, with managed cleanup on the consuming device. A slave must not use
+the provider-only managed clock helper against its master's clock hardware.
+Each configured DAI also holds a CCF rate-exclusive reference until
+``hw_free`` completes that drain and settling. Matching configurations may
+share the generator, while a differing rate, MCLK or frame width is refused.
+Paused streams retain protection. Failed clock transactions restore their
+owned divider/base fields and parent rate on a best-effort basis without
+overwriting unrelated fields or another consumer's exclusive ownership.
+
+The existing ``fsl,saif-master`` phandle establishes a managed device link.
+A slave defers until its master is fully bound, then keeps a per-device
+pointer valid through component teardown. Runtime stream callbacks do not
+look up their master in the legacy global registry. Legacy card users must
+also retain the provider for their MCLK lease and balance it after card
+teardown.
+
+SAIF_CTRL updates share a register lock with the divider provider. Masked
+updates preserve unrelated RUN, format and interrupt fields across clock
+calls; register locks are not held across CCF calls.
+
+``simple-audio-card`` can use ordinary directional links: SAIF0 for playback
+and SAIF1 for capture. A capture-only card does not need a dummy playback
+link: master initialization and capture configuration establish SAIF0's
+framing independently of a playback DAI link. No codec-specific machine
+driver is needed. The mandatory MCLK handle supplies the actual rate; the
+codec does not require a ``set_sysclk()`` callback.
+
+Both SAIF instances advertise the same DAI type name. Simple-card therefore
+adds a link index to runtime names on multi-link cards, keeping their sysfs
+devices distinct. Single-link names remain unchanged. Directional links are
+still ordinary playback/capture PCMs, not a full-duplex codec guarantee.
+
+For a fixed-rate link, the CPU endpoint needs nominal 22.5792 MHz sysclk,
+not SAIF1's internal-logic clock rate. The master functional rate and divider
+must be configured before component initialization. A link ``mclk-fs`` setting
+programmed in PCM hw_params is too late to supply the initialization clock.
+
+At the CLKCTRL layer, the fractional divider and its hardware gate must be
+one rate-and-gate composite with ``CLK_SET_RATE_UNGATE``. This gives the rate
+transaction a counted enable reference before programming DIV and through
+BUSY polling. The public SAIF clock names and IDs remain unchanged, with
+1:1 leaf clocks rather than duplicate owners of the gate bit. The gate must
+already be open before DIV changes (i.MX28 Reference Manual Rev.2,
+HW_CLKCTRL_SAIF0, p.922); it cannot be opened in the same DIV write. This is
+independent of the physical MCLK ownership implemented at SAIF_CTRL.
+Stuck-BUSY recovery remains outside the validated scope.
+
+``audio-graph-card`` uses the same clock helpers and offers no additional
+clock-management advantage for this link. Assigned functional-parent and
+output rates establish the initial frequency; a counted CCF enable supplies
+the physical clock. A successful rate readback alone cannot prove pin activity
+or clock-domain transfer. Further physical generic-card lifecycle validation
+remains required.
+
+Keep board DTS and configuration disabled until clock ownership and actual
+supply wiring are established. Broader playback validation, 24-bit support, system
+suspend/resume, live master/slave unbind and clock-fault recovery remain
+outside the validated scope.
+
+Validation
+==========
+
+The codec object built for ARM with ``W=1`` without warnings. The binding and
+compiled example passed ``dt-doc-validate``, ``dt-mk-schema`` and
+``dt-validate``. Strict ``checkpatch.pl --file`` reported no codec-source
+issues. These checks establish build and schema validity, not electrical
+operation.
+
+Eight additional ARM-QEMU software cases cover sequential capture/playback,
+power failure unwind, mute-error latching, clock and stream constraints,
+component teardown, real regmap paging with odd write indexes, and stream
+clock lifetime using actual ASoC startup/shutdown wrappers. The
+fixture substitutes register transport and clocks; it does not exercise a
+physical speaker or the complete card lifecycle.
+
+The ``mxs-saif-clk`` KUnit cases, enabled by
+``CONFIG_SND_SOC_MXS_SAIF_KUNIT_TEST``, cover supported ratios, the default
+without external MCLK, invalid requests, overflow and one-Hz readback rounding.
+An additional ARM-QEMU run passed 31 clock-helper and actual-driver/CCF
+lifecycle cases, including configured-rate ownership, capture-only framing,
+ASoC START failure wrappers, transaction rollback and actual OF consumer
+lookup/managed cleanup. Registers and DMA
+boundaries were simulated; this is not complete ALSA card or hardware testing.
+
+A separate ARM-QEMU fixture exercises the actual simple-card OF parser and
+full ASoC card registration with two same-named CPU DAIs and a shared codec
+DAI. It registers distinct playback PCM 0 and capture PCM 1 devices, while
+a separate single-link card retains its original runtime name. This checks
+card-registration and naming behavior without emulating the audio hardware.
+
+Tested on a physical PW-SA3 with synchronized DMA termination support:
+
+* Thirteen normal 44.1 kHz S16_LE captures at gain settings 0, 4 and 7
+  returned the expected frame counts: 88,200 for two seconds and 132,300
+  for three seconds. The microphone signal occupied the left slot and the
+  right slot remained zero.
+* Two paused-stream closes completed after 8,820 frames each, followed by
+  successful capture. A second open of the same PCM was refused with
+  ``-EBUSY``.
+* One card-only reload and three full card/codec reloads completed with
+  successful capture afterwards. Gain readback matched the selected value.
+* Capture power registers returned to idle after close. Clock and supply
+  consumer references returned to their starting values after teardown.
+* Twenty observed DMA teardown snapshots had zero semaphore count and idle
+  channel state. No kernel fault reports occurred during the tests.
+
+These results cover the simplified capture codec and synchronized DMA-stop
+path, before the additional normal-mode settling delay and speaker support.
+They do not validate the updated codec, SAIF clock-provider changes or
+production card/board integration. Real
+supply switching and sequencing, live provider unbind, system PM and
+clock-fault recovery remain unvalidated.
+
+A subsequent user-reported check on a physical PW-SA3 with the Buildroot
+``fix1`` image and kernel ``6.1.70-brain-audio-fix1`` confirmed that
+``/audio.sh`` worked: five-second recording followed by speaker playback.
+This provides basic end-to-end confirmation of the corrected generic-card
+integration. No additional frame-count, audio-quality, clock-pin or power-rail
+measurements were supplied with that confirmation; the exclusions above
+still apply.

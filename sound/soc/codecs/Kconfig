@@ -55,6 +55,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_ALC5632
 	imply SND_SOC_AW8738
 	imply SND_SOC_BT_SCO
+	imply SND_SOC_BU26154
 	imply SND_SOC_BD28623
 	imply SND_SOC_CQ0093VC
 	imply SND_SOC_CROS_EC_CODEC
@@ -611,6 +612,18 @@ config SND_SOC_BD28623
 
 config SND_SOC_BT_SCO
 	tristate "Dummy BT SCO codec driver"
+
+config SND_SOC_BU26154
+	tristate "ROHM BU26154 microphone capture codec"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Enable single-ended microphone capture on the ROHM BU26154MUV.
+	  This initial driver supports 44.1 kHz, 16-bit I2S with a 512fs
+	  external master clock. Playback is not supported yet.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-soc-bu26154.
 
 config SND_SOC_CPCAP
 	tristate "Motorola CPCAP codec"
