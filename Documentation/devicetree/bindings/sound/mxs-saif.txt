@@ -11,7 +11,8 @@ Required properties:
 
 Optional properties:
 - fsl,saif-master: phandle to the master SAIF.  It's only required for
-  the slave SAIF.
+  the slave SAIF. The slave defers probing until the master is bound and
+  is unbound before the master, retaining its clock source through teardown.
 
 Note: Each SAIF controller should have an alias correctly numbered
 in "aliases" node.
